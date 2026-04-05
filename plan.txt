@@ -1,0 +1,60 @@
+Title: A Spatial Hand-Tracking Engine for Zero-Touch HCI
+
+The mentioned Project utilizes MediaPipe’s landmark detection and OpenCV to bridge the gap between physical motion and digital input. By mapping skeletal hand coordinates to screen-space pixels, it creates a high-precision, touchless cursor. The system leverages geometric heuristics to interpret finger pinches as hardware-level click events for seamless navigation. In layman terms a virtual cursor.
+
+Phase 1: The Vision Foundation (Getting Stuff Ready)
+Objective: Establish the environment, grab the camera feed, and successfully extract raw hand landmark data without crashing. No math or mouse movement yet.
+
+The Prompt for K: "Set up a Python virtual environment. Write a script using opencv-python and mediapipe. Capture the webcam feed, initialize the MediaPipe Hands module (tracking confidence 0.7), and draw the default landmark connections on the screen. Print the raw (x, y) coordinates of the INDEX_FINGER_TIP, MIDDLE_FINGER_TIP, and THUMB_TIP to the console in real-time."
+
+Success Criteria (Stats): * Stable 30+ FPS video feed.
+
+Console rapidly streams three sets of coordinates.
+
+Pressing 'q' cleanly closes the window and releases the camera.
+
+Phase 2: The Math Engine (Data Processing)
+Objective: Implement the screen mapping and the EMA smoothing filter. We are still not moving the physical mouse yet. We are just simulating the logic.
+
+The Prompt for K: "Take the Phase 1 code. Define a 20% 'Inner Bounding Box' inside the camera frame. Map coordinates inside this box to a 1920x1080 screen resolution using clamping. Next, apply an Exponential Moving Average (EMA) filter to the mapped INDEX_FINGER_TIP coordinates (let's use an alpha of 0.2 for now). Instead of moving the mouse, draw a red circle on the OpenCV video feed representing where the smoothed virtual cursor would be."
+
+Success Criteria (Stats):
+
+Moving your hand inside the center of the camera frame moves the red circle edge-to-edge.
+
+The red circle movement is buttery smooth and lacks the micro-vibrations of the raw landmarks.
+
+Phase 3: The State Machine (Gestures & Hysteresis)
+Objective: Implement the pinch detection and the dual-threshold logic to prevent double-clicks.
+
+The Prompt for K: "Take the Phase 2 code. Calculate the Euclidean distance between INDEX_FINGER_TIP and THUMB_TIP (Left Click), and MIDDLE_FINGER_TIP and THUMB_TIP (Right Click). Implement a Hysteresis state machine. Use a 'click threshold' of 0.04 and a 'release threshold' of 0.07. Do not move the real mouse yet. Instead, print 'LEFT CLICK DOWN', 'LEFT CLICK UP', or 'RIGHT CLICK' to the console, and change the color of our red tracking circle to green when a click is held."
+
+Success Criteria (Stats):
+
+Pinching your index finger and thumb perfectly toggles the console print statements without spamming or flickering.
+
+Hovering your fingers closely (but not pinching) does not trigger accidental clicks.
+
+Phase 4: OS Integration & The Failsafe (The MVP Demo)
+Objective: Connect the flawless math to the Windows operating system and implement an emergency stop.
+
+The Prompt for K: "Take the Phase 3 code. It is time to move the real mouse. Import ctypes.windll.user32. Map the smoothed coordinates to SetCursorPos. Map the Left/Right click states to mouse_event. CRITICAL: Before doing this, implement a failsafe using the keyboard library. If I press the [chosen_key] key at any time, the script must instantly sys.exit(). Hide the OpenCV video window so it runs purely in the background."
+
+Success Criteria (Stats):
+
+Your physical mouse moves accurately with your hand.
+
+You can successfully click and drag icons on your desktop.
+
+Hitting the failsafe key instantly kills the script and gives you your mouse back.
+
+Phase 5: Deployment (The App)
+Objective: Package the python script into a standalone .exe that anyone can double-click and use.
+
+The Prompt for K: "Take the final Phase 4 code. Create a requirements.txt. Give me the exact PyInstaller command to package this into a single, standalone .exe file using the --noconsole flag so it runs invisibly in the background. Include instructions on how to ensure the MediaPipe model files are bundled correctly in the executable."
+
+Success Criteria (Stats):
+
+You have a single .exe file.
+
+You can send it to a friend, they double-click it, and their webcam instantly turns on to track their hand—no terminal, no setup.
