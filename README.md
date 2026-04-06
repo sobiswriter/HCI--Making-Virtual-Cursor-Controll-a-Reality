@@ -46,7 +46,7 @@ We stripped away overlapping "fake dragging" timers in favor of strict, mutually
 
 * **Cursor Movement (Aiming):** Make a "Finger Gun" (Index extended, Middle/Ring/Pinky curled). Aiming the pointer moves the cursor smoothly.
 * **Left Click (Gun Trigger):** While in the Gun Pose, dropping your thumb tight against your index knuckle acts as a physical trigger toggle. It perfectly mimics pulling and releasing a physical mouse button.
-* **Right Click (The Slap):** Radically open your hand into a fully extended "Slap." This explosive clutching-out gesture executes a Right Click.
+* **Right Click (Index Pinch):** While in the Gun Pose, pinch your thumb directly against the tip of your extended index finger. Releasing this pinch fires a Right Click. This is mathematically distinct from the Left Click trigger, ensuring zero misclicks!
 * **Cursor Anchoring:** The millisecond a click gesture is armed, the mathematical engine hard-freezes the cursor. This entirely prevents the natural physical "jump" of your hand from displacing your pointer while executing the action!
 
 ---

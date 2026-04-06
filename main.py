@@ -27,8 +27,8 @@ FRAME_MARGIN = 0.25
 trigger_pulled = False
 trigger_pull_time = 0
 
-fist_pulled = False
-fist_pull_time = 0
+right_pinch_pulled = False
+right_pinch_time = 0
 
 # OS Mouse API Constants
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -85,10 +85,18 @@ def check_thumb_curled(landmarks):
     # regardless of physical hand shape or thickness, while still blocking micro-shake false positives.
     return dist_thumb_to_index_base < (palm_width * 0.55)
 
+def check_thumb_index_pinch(landmarks):
+    # Calculates distance between Index Tip (8) and Thumb Tip (4)
+    dist_thumb_to_index_tip = calculate_distance(landmarks[4], landmarks[8])
+    palm_width = calculate_distance(landmarks[5], landmarks[17])
+    
+    # Needs to be a very tight pinch to avoid misclicks while aiming
+    return dist_thumb_to_index_tip < (palm_width * 0.35)
+
 def main():
     global smoothed_x, smoothed_y, SHOW_PREVIEW
     global trigger_pulled, trigger_pull_time
-    global fist_pulled, fist_pull_time
+    global right_pinch_pulled, right_pinch_time
 
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
@@ -156,7 +164,6 @@ def main():
 
                     # ---------------- GESTURE DEFINITIONS ---------------- 
                     finger_states = get_finger_states(landmarks)
-                    is_thumb_curled = check_thumb_curled(landmarks)
                     
                     is_index_extended = not finger_states['index']
                     is_middle_curled = finger_states['middle']
@@ -165,15 +172,22 @@ def main():
 
                     # The Poses
                     is_gun_pose = is_index_extended and is_middle_curled and is_ring_curled and is_pinky_curled
-                    is_fist = all(finger_states.values())
-                    is_all_extended = not any(finger_states.values()) and not is_thumb_curled
+
+                    # Mutual Exclusion Checks for the Thumb
+                    is_thumb_curled_to_knuckle = check_thumb_curled(landmarks)
+                    is_thumb_pinched_to_index = check_thumb_index_pinch(landmarks)
+                    
+                    # Ensure they cannot both be true simultaneously (prioritize left click if both somehow trigger)
+                    if is_thumb_curled_to_knuckle and is_thumb_pinched_to_index:
+                        is_thumb_pinched_to_index = False
 
                     # The Core Action Triggers
-                    is_left_click_action = is_gun_pose and is_thumb_curled
+                    is_left_click_action = is_gun_pose and is_thumb_curled_to_knuckle
+                    is_right_click_action = is_gun_pose and is_thumb_pinched_to_index
                     
                     # ---------------- CURSOR ANCHORING FOR GESTURE PRECISION ----------------
                     # Freeze the cursor during physical execution of clicks to prevent index-drop jumps
-                    is_executing_gesture = trigger_pulled or fist_pulled or is_fist or is_all_extended
+                    is_executing_gesture = trigger_pulled or right_pinch_pulled or is_left_click_action or is_right_click_action
                     
                     if is_executing_gesture and smoothed_x is not None:
                         raw_screen_x, raw_screen_y = smoothed_x, smoothed_y # HARD LOCK
@@ -212,30 +226,25 @@ def main():
                                 print("LEFT TRIGGER CANCELLED (Slow pull or pose broken)")
                             trigger_pulled = False
 
-                    # ---------------- RIGHT CLICK LOGIC (FIST -> SLAP RELEASE) ---------------- 
-                    if is_fist:
-                        if not fist_pulled:
-                            fist_pulled = True
-                            fist_pull_time = time.time()
-                            print("RIGHT TRIGGER ARMED (Fist Clutched)...")
-                    elif is_all_extended:
-                        if fist_pulled:
-                            duration = time.time() - fist_pull_time
+                    # ---------------- RIGHT CLICK LOGIC (INDEX-THUMB PINCH RELEASE) ---------------- 
+                    if is_right_click_action:
+                        if not right_pinch_pulled:
+                            right_pinch_pulled = True
+                            right_pinch_time = time.time()
+                            print("RIGHT PINCH ARMED...")
+                    else:
+                        if right_pinch_pulled:
+                            duration = time.time() - right_pinch_time
                             
-                            # Must be a rapid explosive open hand (< 0.8s)
-                            if duration < 0.8: 
+                            # Fire constraints: Must return to standard Gun Pose rapidly (< 0.6s)
+                            if is_gun_pose and duration < 0.6: 
                                 ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
                                 ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-                                print("RIGHT CLICK FIRED (Explosive Slap)")
-                            else:
-                                print("RIGHT CLICK CANCELLED (Held fist too long)")
+                                print("RIGHT CLICK FIRED (Pinch Perfect Release)")
+                            elif duration >= 0.6:
+                                print("RIGHT PINCH CANCELLED (Waited too long)")
                                 
-                            fist_pulled = False
-                    else:
-                        # Auto-reset if they dilly-dally before slapping 
-                        if fist_pulled and (time.time() - fist_pull_time > 0.8):
-                            fist_pulled = False
-                            print("RIGHT TRIGGER CANCELLED (Waited too long)")
+                            right_pinch_pulled = False
 
                     # ---------------- VISUAL DIAGNOSTICS ---------------- 
                     if SHOW_PREVIEW:
@@ -243,13 +252,11 @@ def main():
                         vis_y = int(np.interp(smoothed_y, [0, SCREEN_H], [0, h]))
                         
                         circle_color = (0, 0, 255) # Red default (Hover)
-                        if is_all_extended:
-                            circle_color = (255, 0, 0) # Blue (Slap detected)
-                        elif fist_pulled:
-                            circle_color = (255, 0, 255) # Purple (Fist armed)
+                        if right_pinch_pulled:
+                            circle_color = (255, 0, 255) # Purple/Magenta (Right Pinch Armed)
                         elif trigger_pulled:
-                            circle_color = (0, 255, 0) # Green (Thumb Trigger Armed)
-                        elif is_gun_pose and not is_thumb_curled:
+                            circle_color = (0, 255, 0) # Green (Left Trigger Armed)
+                        elif is_gun_pose and not is_thumb_curled_to_knuckle and not is_thumb_pinched_to_index:
                             circle_color = (0, 255, 255) # Yellow (Gun aimed, trigger ready)
                         
                         cv2.circle(frame, (vis_x, vis_y), 10, circle_color, -1)
