@@ -2,7 +2,7 @@
 
 A zero-touch Human-Computer Interaction (HCI) engine that maps physical hand gestures to digital cursor inputs. This project utilizes MediaPipe’s landmark detection and OpenCV to bridge the gap between physical motion and digital input, replacing a physical mouse with a virtual, highly precise spatial system.
 
-**Created by Soura**
+**Created by SoBi**
 
 ---
 
