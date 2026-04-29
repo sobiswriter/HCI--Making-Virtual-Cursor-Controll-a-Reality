@@ -7,11 +7,23 @@ import ctypes
 import keyboard
 import sys
 
+import os
+
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
 HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # Global variable to store the result asynchronously
 latest_result = None
@@ -24,17 +36,11 @@ SCREEN_W, SCREEN_H = 1920, 1080
 FRAME_MARGIN = 0.25 
 
 # Click States
-trigger_pulled = False
-trigger_pull_time = 0
-
-right_pinch_pulled = False
-right_pinch_time = 0
+is_left_down = False
 
 # OS Mouse API Constants
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
-MOUSEEVENTF_RIGHTDOWN = 0x0008
-MOUSEEVENTF_RIGHTUP = 0x0010
 
 # Option to show camera feed
 SHOW_PREVIEW = False 
@@ -67,23 +73,7 @@ def calculate_distance(lm1, lm2):
     # This prevents hand-tilts or wrist pitches from destroying the measurement!
     return math.sqrt((lm1.x - lm2.x)**2 + (lm1.y - lm2.y)**2 + (lm1.z - lm2.z)**2)
 
-def get_finger_states(landmarks):
-    # True means Curled. False means Extended.
-    states = {}
-    finger_joints = {'index': (8, 6), 'middle': (12, 10), 'ring': (16, 14), 'pinky': (20, 18)}
-    wrist = landmarks[0]
-    for name, (tip, pip) in finger_joints.items():
-        states[name] = calculate_distance(landmarks[tip], wrist) < calculate_distance(landmarks[pip], wrist)
-    return states
 
-def check_thumb_curled(landmarks):
-    # By upgrading to 3D, the thumb's actual depth is measured.
-    palm_width = calculate_distance(landmarks[5], landmarks[17])
-    dist_thumb_to_index_base = calculate_distance(landmarks[4], landmarks[5])
-    
-    # Relaxed to 55% spatial volume to cleanly capture the thumb curling down against the knuckle
-    # regardless of physical hand shape or thickness, while still blocking micro-shake false positives.
-    return dist_thumb_to_index_base < (palm_width * 0.55)
 
 def check_thumb_index_pinch(landmarks):
     # Calculates distance between Index Tip (8) and Thumb Tip (4)
@@ -95,11 +85,10 @@ def check_thumb_index_pinch(landmarks):
 
 def main():
     global smoothed_x, smoothed_y, SHOW_PREVIEW
-    global trigger_pulled, trigger_pull_time
-    global right_pinch_pulled, right_pinch_time
+    global is_left_down
 
     options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
+        base_options=BaseOptions(model_asset_path=resource_path('hand_landmarker.task')),
         running_mode=VisionRunningMode.LIVE_STREAM,
         result_callback=get_result,
         num_hands=1,
@@ -109,6 +98,9 @@ def main():
     )
 
     cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FPS, 60)
     if not cap.isOpened():
         print("Error: Could not open webcam.")
         return
@@ -144,7 +136,7 @@ def main():
                     if SHOW_PREVIEW:
                         draw_landmarks_manual(frame, landmarks)
                     
-                    index_tip = landmarks[8]
+                    anchor = landmarks[5] # Using Index Knuckle for stability
                     
                     h, w, c = frame.shape
                     
@@ -159,92 +151,37 @@ def main():
                                       (int(box_right * w), int(box_bottom * h)), 
                                       (255, 0, 0), 2)
 
-                    raw_screen_x = np.interp(index_tip.x, [box_left, box_right], [0, SCREEN_W])
-                    raw_screen_y = np.interp(index_tip.y, [box_top, box_bottom], [0, SCREEN_H])
+                    raw_screen_x = np.interp(anchor.x, [box_left, box_right], [0, SCREEN_W])
+                    raw_screen_y = np.interp(anchor.y, [box_top, box_bottom], [0, SCREEN_H])
 
                     # ---------------- GESTURE DEFINITIONS ---------------- 
-                    finger_states = get_finger_states(landmarks)
-                    
-                    is_index_extended = not finger_states['index']
-                    is_middle_curled = finger_states['middle']
-                    is_ring_curled = finger_states['ring']
-                    is_pinky_curled = finger_states['pinky']
-
-                    # The Poses
-                    is_gun_pose = is_index_extended and is_middle_curled and is_ring_curled and is_pinky_curled
-
-                    # Mutual Exclusion Checks for the Thumb
-                    is_thumb_curled_to_knuckle = check_thumb_curled(landmarks)
                     is_thumb_pinched_to_index = check_thumb_index_pinch(landmarks)
-                    
-                    # Ensure they cannot both be true simultaneously (prioritize left click if both somehow trigger)
-                    if is_thumb_curled_to_knuckle and is_thumb_pinched_to_index:
-                        is_thumb_pinched_to_index = False
 
-                    # The Core Action Triggers
-                    is_left_click_action = is_gun_pose and is_thumb_curled_to_knuckle
-                    is_right_click_action = is_gun_pose and is_thumb_pinched_to_index
-                    
-                    # ---------------- CURSOR ANCHORING FOR GESTURE PRECISION ----------------
-                    # Freeze the cursor during physical execution of clicks to prevent index-drop jumps
-                    is_executing_gesture = trigger_pulled or right_pinch_pulled or is_left_click_action or is_right_click_action
-                    
-                    if is_executing_gesture and smoothed_x is not None:
-                        raw_screen_x, raw_screen_y = smoothed_x, smoothed_y # HARD LOCK
-
-                    # ---------------- OS CURSOR SMOOTHING + DEADZONE ----------------
+                    # ---------------- OS CURSOR SMOOTHING ----------------
                     if smoothed_x is None:
                         smoothed_x, smoothed_y = raw_screen_x, raw_screen_y
                     else:
                         dist_moved = math.hypot(raw_screen_x - smoothed_x, raw_screen_y - smoothed_y)
                         
-                        if dist_moved < 18.0:
-                            pass
-                        else:
-                            dynamic_alpha = 0.05 + min((dist_moved - 18) / 400.0, 0.4) 
-                            smoothed_x = dynamic_alpha * raw_screen_x + (1 - dynamic_alpha) * smoothed_x
-                            smoothed_y = dynamic_alpha * raw_screen_y + (1 - dynamic_alpha) * smoothed_y
+                        # Dynamic EMA: Heavily dampens slow micro-movements, highly responsive to fast movements
+                        dynamic_alpha = 0.1 + min(dist_moved / 200.0, 0.7)
+                        
+                        smoothed_x = dynamic_alpha * raw_screen_x + (1 - dynamic_alpha) * smoothed_x
+                        smoothed_y = dynamic_alpha * raw_screen_y + (1 - dynamic_alpha) * smoothed_y
                     
                     ctypes.windll.user32.SetCursorPos(int(smoothed_x), int(smoothed_y))
 
-                    # ---------------- LEFT CLICK LOGIC (PULL & RELEASE TAPPING) ---------------- 
-                    if is_left_click_action:
-                        if not trigger_pulled:
-                            trigger_pulled = True
-                            trigger_pull_time = time.time()
-                            print("LEFT TRIGGER ARMED...")
+                    # ---------------- LEFT CLICK LOGIC (PINCH TO CLICK & DRAG) ---------------- 
+                    if is_thumb_pinched_to_index:
+                        if not is_left_down:
+                            is_left_down = True
+                            ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                            print("LEFT CLICK DOWN (Drag Armed)")
                     else:
-                        if trigger_pulled:
-                            duration = time.time() - trigger_pull_time
-                            
-                            # Fire constraints: Hand must still be in strict Gun Pose, and physical tap rapid
-                            if is_gun_pose and duration < 0.6: 
-                                ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                                ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                                print("LEFT CLICK FIRED (Perfect Pull & Release)")
-                            else:
-                                print("LEFT TRIGGER CANCELLED (Slow pull or pose broken)")
-                            trigger_pulled = False
-
-                    # ---------------- RIGHT CLICK LOGIC (INDEX-THUMB PINCH RELEASE) ---------------- 
-                    if is_right_click_action:
-                        if not right_pinch_pulled:
-                            right_pinch_pulled = True
-                            right_pinch_time = time.time()
-                            print("RIGHT PINCH ARMED...")
-                    else:
-                        if right_pinch_pulled:
-                            duration = time.time() - right_pinch_time
-                            
-                            # Fire constraints: Must return to standard Gun Pose rapidly (< 0.6s)
-                            if is_gun_pose and duration < 0.6: 
-                                ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-                                ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-                                print("RIGHT CLICK FIRED (Pinch Perfect Release)")
-                            elif duration >= 0.6:
-                                print("RIGHT PINCH CANCELLED (Waited too long)")
-                                
-                            right_pinch_pulled = False
+                        if is_left_down:
+                            is_left_down = False
+                            ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                            print("LEFT CLICK UP (Drag Released)")
 
                     # ---------------- VISUAL DIAGNOSTICS ---------------- 
                     if SHOW_PREVIEW:
@@ -252,12 +189,8 @@ def main():
                         vis_y = int(np.interp(smoothed_y, [0, SCREEN_H], [0, h]))
                         
                         circle_color = (0, 0, 255) # Red default (Hover)
-                        if right_pinch_pulled:
-                            circle_color = (255, 0, 255) # Purple/Magenta (Right Pinch Armed)
-                        elif trigger_pulled:
-                            circle_color = (0, 255, 0) # Green (Left Trigger Armed)
-                        elif is_gun_pose and not is_thumb_curled_to_knuckle and not is_thumb_pinched_to_index:
-                            circle_color = (0, 255, 255) # Yellow (Gun aimed, trigger ready)
+                        if is_left_down:
+                            circle_color = (0, 255, 0) # Green (Clicking/Dragging)
                         
                         cv2.circle(frame, (vis_x, vis_y), 10, circle_color, -1)
 
